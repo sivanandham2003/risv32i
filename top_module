@@ -1,0 +1,364 @@
+module decoder2 (
+	input wire [31:0]inst,
+	output reg [4:0] rd,
+	output reg [4:0] rs1,
+	output reg [4:0] rs2,
+	output reg [2:0] funct3,
+	output reg [6:0] funct7,
+	output reg [1:0] alu_sel,
+	output reg [1:0] ld_sel,
+	output reg [11:0]imm,
+	output reg       mem_enb,
+	output reg 	 reg_write,
+	output reg 	 alu_scr2,
+	output reg [1:0] imm_scr
+);
+
+wire [6:0] opcode ;
+assign opcode = inst[6:0];
+
+localparam load    =7'b0000011;		//load
+localparam r_type  =7'b0110011;		//add,sub,or,and
+localparam r_imm   =7'b0010011;		//addi,ori,andi
+
+localparam add     ={3'b000,7'b0000000};
+localparam sub     ={3'b000,7'b0100000};
+localparam or1     ={3'b110,7'b0000000};
+localparam and1    ={3'b111,7'b0000000};
+
+
+always @(*) begin
+	
+	rd = 5'd0;
+        rs1 = 5'd0; 
+        rs2 = 5'd0; 
+        funct3 = 3'd0; 
+        funct7 = 7'd0;
+	alu_sel = 2'd0; 
+	ld_sel = 2'd0; 
+	imm = 12'd0;
+	mem_enb = 1'b0; 
+	reg_write = 1'b0; 
+	alu_scr2 = 1'b0; 
+	imm_scr = 2'd0;
+	
+	case (opcode) 
+	
+	r_type: begin
+		rd	=inst[11:7];
+		funct3  =inst[14:12];
+		rs1	=inst[19:15];
+		rs2	=inst[24:20];
+		funct7	=inst[31:25];
+		alu_scr2=1'b0;				//select alu's second input whether that is immediate or from registor
+		reg_write=1'b1;				//it enable the permission of register to write a data into it
+		mem_enb	=1'b0;	
+		imm_scr =2'b00;			// it control the memory accsess
+		case ({funct3,funct7}) 
+			{3'b000, 7'b0000000}: alu_sel	= 2'b00;	//add
+			{3'b000, 7'b0100000} : alu_sel	= 2'b01;	//xor
+			{3'b110, 7'b0000000} : alu_sel	= 2'b10;	//or
+			{3'b111, 7'b0000000}: alu_sel	= 2'b11;	//and
+			 
+		endcase
+		end
+	
+	load: begin
+		rd	=inst[11:7];
+		funct3	=inst[14:12];
+		rs1	=inst[19:15];
+		imm 	=inst[31:20];
+		reg_write=1'b1;
+		mem_enb=1'b1;
+		imm_scr=2'b00;
+		case (funct3) 
+			3'b010 : ld_sel	= 2'b00;	//load word 
+			3'b001 : ld_sel = 2'b01;	//load half word
+			
+		endcase
+		end
+		
+	r_imm: begin
+		rd	=inst[11:7];
+		funct3	=inst[14:12];
+		rs1	=inst[19:15];
+		imm 	=inst[31:20];
+		reg_write=1'b1;
+		mem_enb	=1'b0;
+		alu_scr2=1'b1;
+		imm_scr	=2'b00;
+		
+		case (funct3) 
+			3'b000 : alu_sel=2'b00;	//addi
+			3'b100 : alu_sel=2'b01;	//xori
+			3'b110 : alu_sel=2'b10;	//ori
+			3'b111 : alu_sel=2'b11;	//andi
+			
+		endcase
+		
+	end
+	endcase
+end	
+endmodule	
+
+			
+			
+//
+module register (
+	input reg_write,clk,
+	input [4:0] rd,
+	input [4:0] rs1,
+	input [4:0] rs2,
+	input [31:0] rslt_data,
+	output reg [31:0] a1,a2
+	);
+	
+reg [31:0] mem[31:0];
+always@(posedge clk) begin
+	if(reg_write) begin
+		mem[rd]=rslt_data;
+		end
+	end
+	
+always@(*) begin
+	a1=mem[rs1];
+	a2=mem[rs2];
+	end
+	
+initial begin
+	mem[0] = 32'd0;
+	mem[2] = 32'd20;  // x2 = 10
+	mem[3] = 32'd40;  // x3 = 20
+end
+	
+endmodule
+
+////
+module mux_alu2_sel(
+	
+	input wire [31:0] a2,
+	input wire [31:0] imm_ext,
+	input 		  alu_scr2,
+	output wire [31:0]mux_scr2
+);
+
+assign mux_scr2=alu_scr2?imm_ext:a2;
+
+endmodule
+
+///
+module alu(
+  input wire [31:0] a1,
+  input wire [31:0] mux_scr2,
+  input wire [1:0] alu_sel,
+  input wire [1:0] ld_sel,
+  input wire [11:0] imm,
+  output reg [31:0] alu_rslt,
+  output reg [31:0] addr
+	
+);
+
+always@(*) begin
+ 	case(alu_sel) 
+ 	
+ 		2'b00:alu_rslt = a1 + mux_scr2;
+ 		2'b01:alu_rslt = a1 - mux_scr2;
+ 		2'b10:alu_rslt = a1 & mux_scr2;
+ 		2'b11:alu_rslt = a1 | mux_scr2;
+ 		
+ 	endcase
+ 	end 
+ 	
+ always@(*) begin
+ 	case(ld_sel)
+ 		2'b00 : addr = a1 + {{20{imm[11]}},imm[11:0]};
+ 		default :  addr = 32'd0;
+ 		endcase
+ 		end
+ 
+  
+ 
+ endmodule
+ 
+ 
+ ///
+ module sign_extend(
+	input [31:0]inst,
+	input [1:0] imm_scr,
+	output reg [31:0] imm_ext
+
+);
+
+always@(*) begin
+
+	case(imm_scr)
+	
+        	 2'b00 : imm_ext = {{20{inst[31]}},inst[31:20]};
+        	 2'b01 : imm_ext = {{20{inst[31]}},inst[31:20]};
+   		 default imm_ext = 32'd0;
+	endcase
+	end
+endmodule
+
+////
+module data_memory (
+    input wire clk,
+    input wire mem_enb,
+    input wire [31:0] addr,
+    output reg [31:0] data_out
+);
+    reg [31:0] mem [0:255];  // 256 words = 1 KB memory
+
+    always @(*) begin
+        if (mem_enb)
+            data_out = mem[addr >> 2]; // word-aligned access
+        else
+            data_out = 32'd0;
+    end
+
+    // Initialize memory for testing
+    initial begin
+        mem[3] = 32'd50;  // address = 4 * 3 = 12
+        mem[4] = 32'd100; // address = 4 * 4 = 16
+    end
+endmodule
+
+
+module top_riscv (
+    input wire clk,
+    input wire [31:0] inst,
+    output wire [31:0] alu_result	
+);
+    // --- Signals from decoder ---
+    wire [4:0] rd, rs1, rs2;
+    wire [2:0] funct3;
+    wire [6:0] funct7;
+    wire [1:0] alu_sel;
+    wire [11:0] imm;
+    wire [1:0] imm_scr;
+    wire mem_enb, reg_write, alu_scr2;
+        wire [31:0] mem_data;
+    wire [31:0] write_back_data;
+    wire [1:0] ld_sel;
+    wire [31:0]addr;
+
+
+    // --- Signals between modules ---
+    wire [31:0] a1, a2;          // From register file
+    wire [31:0] mux_scr2_out;    // From ALU mux
+    wire [31:0] imm_extended;     // From sign extender
+
+    // --- Instantiate decoder ---
+    decoder2 decoder (
+        .inst(inst),
+        .rd(rd),
+        .rs1(rs1),
+        .rs2(rs2),
+        .funct3(funct3),
+        .funct7(funct7),
+        .alu_sel(alu_sel),
+        .ld_sel(ld_sel),
+        .imm(imm),
+        .mem_enb(mem_enb),
+        .reg_write(reg_write),
+        .alu_scr2(alu_scr2),
+        .imm_scr(imm_scr)
+    );
+
+    // --- Instantiate register file ---
+    register reg_file (
+        .clk(clk),
+        .reg_write(reg_write),
+        .rd(rd),
+        .rs1(rs1),
+        .rs2(rs2),
+        //.rslt_data(alu_result),  // Feedback from ALU
+        .a1(a1),
+        .a2(a2),
+        .rslt_data(write_back_data)
+    );
+
+    // --- Instantiate sign extender ---
+    sign_extend sign_ext (
+        .inst(inst),
+        .imm_scr(imm_scr),
+        .imm_ext(imm_extended)
+    );
+
+    // --- Instantiate ALU input mux ---
+    mux_alu2_sel alu_mux (
+        .a2(a2),
+        .imm_ext(imm_extended),
+        .alu_scr2(alu_scr2),
+        .mux_scr2(mux_scr2_out)
+    );
+
+    // --- Instantiate ALU ---
+    alu alu_unit (
+        .a1(a1),
+        .mux_scr2(mux_scr2_out),
+        .alu_sel(alu_sel),
+        .ld_sel(ld_sel),
+        .imm(imm),
+        .addr(addr),
+        .alu_rslt(alu_result)
+    );
+    
+    // ---Instantiate DATA memory ---
+        data_memory dmem (
+        .clk(clk),
+        .mem_enb(mem_enb),
+        .addr(alu_result),
+        .data_out(mem_data)
+    );
+
+    assign write_back_data = mem_enb ? mem_data : alu_result;
+
+endmodule
+
+module riscv_tb;
+    reg clk;
+    reg [31:0] inst;
+    wire [31:0] alu_result;
+
+    // Instantiate top module
+    top_riscv uut (
+        .clk(clk),
+        .inst(inst),
+        .alu_result(alu_result)
+    );
+
+    // Clock generation (10ns period)
+    always #5 clk = ~clk;
+
+    // Initialize simulation
+    initial begin
+        clk = 0;
+        
+        // --- Test 1: R-type ADD (add x1, x2, x3) ---
+        inst = 32'b0000000_00011_00010_000_00001_0110011; // add x1, x2, x3
+        #10;  // Wait for 1 clock cycle
+        
+        $display("ADD: x1 = x2 + x3 = %d", alu_result);
+        
+        // --- Test 2: I-type ADDI (addi x1, x2, 5) ---
+        inst = 32'b000000000101_00010_000_00001_0010011; // addi x1, x2, 5
+        #10;
+        
+        $display("ADDI: x1 = x2 + 5 = %d", alu_result);
+        
+        // --- Test 3: Load Word (lw x1, 4(x2)) ---
+        inst = 32'b000000000100_00011_010_00001_0000011; // lw x1, 4(x2)
+        #10;
+        
+        $display("LW: x1 = Mem[x2 + 4] = %d", alu_result);
+        
+        $finish;
+    end
+
+    // Waveform dumping
+    initial begin
+        $dumpfile("riscv_waves.vcd");
+        $dumpvars(0, riscv_tb);
+    end
+endmodule
